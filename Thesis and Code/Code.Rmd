@@ -1,0 +1,1229 @@
+---
+title: "Bachelor Thesis"
+author: "Sabrina Rasch"
+date: "20/09/21"
+output:
+  html_document:
+    df_print: paged
+---
+
+# Setup
+
+```{r message=FALSE, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+
+#set working directory to Source file location !Attention: look at the directory of where you want your file
+#setwd("C:/Users/sabri/OneDrive/Desktop/HS21/Bachelor thesis/Hand in folder") 
+
+#load packages
+library(data.table)
+library(tidyverse)
+library(latex2exp)
+```
+
+## Original data
+
+The original data can be found in the folder *Original data*.
+
+Some files were maipulated in VSC for easier access in R Studio and can be found in the folder *VSC manipulated data*. 
+
+## Questions
+
+Three question will be answered with the computations in this code.
+
+1.  What are genes with fixed mutations and what is their function?
+    + Based on the list of the 41 fixed mutations (*FixedMutations_OverTime.txt*) find the gene they belong to (*alltogether_modified.lst.txt*).
+    + Further the DNA and Amino Acid sequence are needed. (*alltogether_modified.gen.fasta_spaced.gen* and *alltogether_modified_spaced.prt*)
+
+2. Do we see the same mutations in replicates of the mono-cultures and co-culture?
+    + From all SNPs that have been found (*allSNPs_w_gene_position.tsv*) compare the SNPs in mono-cultures and co-cultures of AGTU and COTE.
+
+3. Can we estimate dN/dS? Which genes are under positive/negative selection?
+    + Based of the assigned NS/S (*allSNPs_w_gene_position.tsv*) estimate dN/dS for the genes of the fixed SNPs per microcosm.
+
+
+# Question 1
+
+**What are genes with fixed mutations and what is their function?**
+
+## Import SNP and gene_name Data
+
+In file *alltogether_modified.lst* manually find "|" and replace with "space". I do this to be able to import the data as a data.frame. At the end of the first row I add several spaces, to have enough space for all words of the name of the protein (because the Proteins do not have the same nr. of words in the name)
+
+```{r}
+#Import data files and have a general look at them.
+  #!Attention: look at the directory of where the file are stored
+  fixed <- read.delim(file = "C:/Users/sabri/OneDrive/Desktop/HS21/Bachelor thesis/Hand in folder/Data/Original/FixedMutations_OverTime.txt")
+  #str(fixed)
+  
+  gene_name <- read.delim(file = "C:/Users/sabri/OneDrive/Desktop/HS21/Bachelor thesis/Hand in folder/Data/VSC manipulated/alltogether_modified.lst_spaced.txt", sep = " " , header = FALSE)
+    #str(gene_name)
+```
+
+## Tidy up data
+
+To work with the data I first need to make the imported data manageable by searching for distinct data, making the protein name one column and deleting the columns that I do not need.
+
+```{r}
+#Take only the distinct (the ones without a duplicate) and put them in a data frame.
+  gene_name_dist <- distinct(gene_name)
+  fixed_dist <- distinct(fixed)
+
+#Tidy up the gene_name data
+  gene_name_dist_tidy <- gene_name_dist
+  #Takes all columns that could include words from the name and  puts them in one
+    gene_name_dist_tidy$V22 <- paste(gene_name_dist$V13, gene_name_dist$V14, gene_name_dist$V15, gene_name_dist$V16, gene_name_dist$V17, gene_name_dist$V18, gene_name_dist$V19, gene_name_dist$V20, gene_name_dist$V21) 
+  #Select only the columns that I want
+    gene_name_dist_tidy <- gene_name_dist_tidy %>% select(2, 3, 8, 10, 11, 22) 
+
+#Set column names
+  names(gene_name_dist_tidy) <- c("Start", "End", "Gene", "Organism", "UniProtID", "Protein")
+  names(fixed_dist) <- c("Microbe", "Replicate", "Position", "Ref", "Alt")
+  
+#Tidy up the SNP data
+    fixed_dist_tidy <- fixed_dist %>% arrange(Microbe, Replicate, Position)
+    fixed_dist_tidy$Number <- c(1:41)
+```
+
+## Find gene
+
+I want to compare the protein data with the fixed SNP data and make one data frame from it.
+
+```{r}
+#Convert the data frames to data tables to colapps them to one data table.
+  setDT(gene_name_dist_tidy)
+  setDT(fixed_dist_tidy)
+
+#Compare the data tables based on Microbe has to be the same as Organism. And the position of the fixed SNP has to be bigger than the start of the gene and smaller than the end of the gene. If the SNP is not in a region where there is a gene there will be no entry in the new data table. In my new data table I want to have the position of the SNP, the start and end of the gene, the replicate and microcosm, the name of the protein, the name of the gene, the reference and alternative nucleotide and the UniProt ID.
+  Result_Genes <- fixed_dist_tidy[gene_name_dist_tidy, on = .(Microbe = Organism, Position >= Start, Position < End), nomatch = 0,
+                .(Number, x.Position, Start, End,  Organism, Microbe, Replicate, Protein, Gene, Ref, Alt, UniProtID)]
+
+#Arrange the result nicely
+  Result_Genes_sorted <- Result_Genes %>% arrange(Number)
+  Result_Genes_sorted <- Result_Genes_sorted %>% select("Organism", "Replicate", "Number", "x.Position", "Ref", "Alt", "Gene", "Start", "End", "Protein", "UniProtID")
+  
+  #store the results !Attention: look at the directory of where the file will be stored    #write.csv(Result_Genes_sorted, file="Result_Genes_sorted.csv", row.names=FALSE)
+```
+
+## Find DNA sequence
+
+I want to find the DNA sequence to be able to BLAST it.
+
+In file "alltogether_modified.gen.fasta.gen" manually (in VSC) find "|" and replace with "space", so that import is a data.frame, add several spaces at the end of the first row so that there is enough space for all words of the name of the protein (because the Proteins do not have the same nr. of words in the name)
+
+### Import DNA sequence data
+
+```{r}
+#Import data files and have a general look at them.
+  #!Attention: look at the directory of where the file are stored
+  DNA_seq <- read.delim(file = "C:/Users/sabri/OneDrive/Desktop/HS21/Bachelor thesis/Hand in folder/Data/VSC manipulated/alltogether_modified.gen.fasta_spaced.gen", sep = " ", header = FALSE)
+    #str(DNA_seq)
+    
+  SNP_genes_sorted <- read.delim(file = "C:/Users/sabri/OneDrive/Desktop/HS21/Bachelor thesis/Hand in folder/Results/Question 1/Result_Genes_sorted.csv", sep = ",")
+    #str(SNP_genes_sorted)
+```
+
+### Tidy up data
+
+To work with the data I first need to make the imported data manageable by searching for distinct data, making the protein name one column and deleting the columns that I do not need.
+
+```{r}
+DNA_seq_tidy <- DNA_seq
+
+#Takes all columns that could include words from the name and  puts them in one
+  DNA_seq_tidy$V26 <- paste(DNA_seq_tidy$V15, DNA_seq_tidy$V16, DNA_seq_tidy$V17, DNA_seq_tidy$V18, DNA_seq_tidy$V19, DNA_seq_tidy$V20, DNA_seq_tidy$V21, DNA_seq_tidy$V22, DNA_seq_tidy$V23, DNA_seq_tidy$V24, DNA_seq_tidy$V25)
+  #Select only the columns that I want
+    DNA_seq_tidy <- DNA_seq_tidy %>% select(1, 6, 7, 9, 12, 13, 26)
+    
+#Set column names
+  colnames(DNA_seq_tidy) <- c("DNA", "Start", "End", "Gene", "Organism", "UniProtID", "Protein")
+```
+
+### DNArow numbers
+
+Now I want a table where the DNA sequence is in one row. For that I need to know from which row to which row one DNA sequence goes. 
+
+```{r}
+#Getting the number of the row where there is nothing in the column DNA
+  DNArow <- ifelse(DNA_seq_tidy$DNA == "", rownames(DNA_seq_tidy), "")
+
+#Selecting only the rows where there is actually a number
+  DNArow_start <- subset(DNArow, DNArow!="") 
+    DNArow_start <- as.numeric(DNArow_start)
+    
+#Calculating the end row of the DNA sequence, meaning that I take the second entry in DNArow_start and subtract 1. At the end I add the number of rows the table has. I'm doing this to be able to automatically past all rows together belonging to one DNA sequence. 
+  DNArow_end <- c(DNArow_start[2:length(DNArow_start)]-1, nrow(DNA_seq_tidy)) 
+```
+
+#### Add these columns
+
+If I want to add specific columns to my final data table I have to make a vector with them.
+
+```{r}
+#I want the gene name to be able to search for it
+  DNAGene <- ifelse(DNA_seq_tidy$Gene == "", "",DNA_seq_tidy$Gene)
+  DNAGene <- subset(DNAGene, DNAGene!="")
+
+#I want the start of the gene
+  DNAStart <- ifelse(DNA_seq_tidy$Start == "", "",DNA_seq_tidy$Start) 
+  DNAStart <- subset(DNAStart, DNAStart!="")
+
+#I want the End of the gene
+  DNAEnd <- ifelse(DNA_seq_tidy$End == "", "",DNA_seq_tidy$End) 
+  DNAEnd <- subset(DNAEnd, DNAEnd!="")
+
+#I want the Organism of the protein
+  DNAOrganism <- ifelse(DNA_seq_tidy$Organism == "", "",DNA_seq_tidy$Organism) 
+  DNAOrganism <- subset(DNAOrganism, DNAOrganism!="")
+```
+
+#### Making the DNA sequence table
+
+Make one table where the DNA sequence is in one column and that has the columns I just selected.
+
+```{r}
+#Empty data frame to Start
+  DNA_table <- as.data.frame(c())
+
+for (a in 1:length(DNArow_start)){
+  #This pastes together the entries in DNA from the DNArow_start till DNArow_end making the sequence one vector 
+    DNAconcatenated <-paste0(DNA_seq_tidy$DNA[DNArow_start[a]:DNArow_end[a]], collapse = "")
+  #Making a table where we have the sequence and the short name of the protein (Careful: if you want to add another element to the table make a vector where these elements are included and add it to the c())
+    DNA_table <- rbind(DNA_table,c(DNAconcatenated, DNAGene[a], DNAStart[a], DNAEnd[a], DNAOrganism[a]))
+}
+
+#Set column names
+  colnames(DNA_table) <- c("DNA_sequence","DNAGene", "DNAStart", "DNAEnd", "DNAOrganism")
+```
+
+### Fitting DNA table and SNP gene data
+
+Finding the sequences of the SNP genes, by collapsing two tables.
+
+```{r}
+#Convert the data frames to data tables to collapse them to one data table.
+  setDT(DNA_table)
+  setDT(SNP_genes_sorted)
+  
+#Change the format of two columns so that they fit together
+  SNP_genes_sorted$Start <- as.character(SNP_genes_sorted$Start)
+  SNP_genes_sorted$End <- as.character(SNP_genes_sorted$End)
+
+#Making one data table which has the gene name, start, end, organism, from both the gene result and the DNA table and of course the DNA_sequence.
+  Result_DNA <- SNP_genes_sorted[DNA_table, on = .(Gene = DNAGene, Start = DNAStart, End = DNAEnd, Organism = DNAOrganism), nomatch = 0,
+                  .(Number, x.Gene, Start, End, Organism, DNA_sequence, DNAGene, DNAStart, DNAEnd, DNAOrganism)]
+  
+#Arrange the result nicely
+  Result_DNA_sorted <- Result_DNA %>% arrange(Number)
+  Result_DNA_sorted <- Result_DNA_sorted %>% select("Organism", "DNAOrganism", "Number", "x.Gene", "DNAGene", "Start", "DNAStart", "End", "DNAEnd", "DNA_sequence")
+  
+  #store the results !Attention: look at the directory of where the file will be stored    #write.csv(Result_DNA_sorted, file = "Result_DNA_sorted.csv", row.names=FALSE)
+```
+
+## Find AA sequence
+
+I want to find the AA sequence to be able to BLAST it.
+
+In file "alltogether_modified.prt" mannually (in VSC) find "|" and replace with "space", so that import is a data.frame, add several spaces at the end of the first row so that there is enough space for all words of the name of the protein (because the Proteins do not have the same nr. of words in the name).
+
+### Import AA sequence data
+
+
+```{r}
+#Import data files and have a general look at them.
+  #!Attention: look at the directory of where the file are stored
+    AA_seq <- read.delim(file = "C:/Users/sabri/OneDrive/Desktop/HS21/Bachelor thesis/Hand in folder/Data/VSC manipulated/alltogether_modified_spaced.prt", sep = " ", header = FALSE)
+    #str(AA_seq)
+    
+  SNP_genes_sorted <- read.delim(file = "C:/Users/sabri/OneDrive/Desktop/HS21/Bachelor thesis/Hand in folder/Results/Question 1/Result_Genes_sorted.csv", sep = ",")
+    #str(SNP_genes_sorted)
+```
+
+### Tidy up data
+
+To work with the data I first need to make the imported data manageable by searching for distinct data, making the protein name one column and deleting the columns that I do not need.
+
+```{r}
+AA_seq_tidy <- AA_seq
+
+#Takes all columns that could include words from the name and  puts them in one
+  AA_seq_tidy$V23 <- paste(AA_seq_tidy$V15, AA_seq_tidy$V16, AA_seq_tidy$V17, AA_seq_tidy$V18, AA_seq_tidy$V19, AA_seq_tidy$V20, AA_seq_tidy$V21, AA_seq_tidy$V22)
+  #Select only the columns that I want
+    AA_seq_tidy <- AA_seq_tidy %>% select(1, 6, 7, 9, 12, 13, 23)    
+
+#Set column names
+  colnames(AA_seq_tidy) <- c("AA", "Start", "End", "Gene", "Organism", "UniProtID", "Protein")
+```
+
+## AArow numbers
+
+Now I want a table where the AA sequence is in one row. For that I need to know from which row to which row one AA sequence goes. 
+
+```{r}
+#Getting the number of the row where there is nothing in the column AA
+  AArow <- ifelse(AA_seq_tidy$AA == "", rownames(AA_seq_tidy), "")
+
+#Selecting only the rows where there is actually a number
+  AArow_start <- subset(AArow, AArow!="")
+    AArow_start <- as.numeric(AArow_start)
+
+#Calculating the end row of the DNA sequence, meaning that I take the second entry in DNArow_start and subtract 1. At the end I add the number of rows the table has. I'm doing this to be able to automatically past all rows together belonging to one DNA sequence. 
+    AArow_end <- c(AArow_start[2:length(AArow_start)]-1, nrow(AA_seq_tidy))
+```
+
+#### Add these columns
+
+If I want to add specific columns to my final data table I have to make a vector with them.
+
+```{r}
+#I want the gene name to be able to search for it
+  AAGene <- ifelse(AA_seq_tidy$Gene == "", "",AA_seq_tidy$Gene)
+  AAGene <- subset(AAGene, AAGene!="")
+
+#I want the start of the gene
+  AAStart <- ifelse(AA_seq_tidy$Start == "", "",AA_seq_tidy$Start) 
+  AAStart <- subset(AAStart, AAStart!="")
+
+#I want the End of the gene
+  AAEnd <- ifelse(AA_seq_tidy$End == "", "",AA_seq_tidy$End) 
+  AAEnd <- subset(AAEnd, AAEnd!="")
+
+#I want the Organism of the protein
+  AAOrganism <- ifelse(AA_seq_tidy$Organism == "", "",AA_seq_tidy$Organism) 
+  AAOrganism <- subset(AAOrganism, AAOrganism!="")
+```
+
+#### Making the AA sequence table
+
+Make one table where the AA sequence is in one column and that has the columns I just selected.
+
+```{r}
+#Empty data frame to Start
+  AA_table <- as.data.frame(c())
+
+for (b in 1:length(AArow_start)){
+  #This pastes together the entries in AA from the DNArow_start till DNArow_end making the sequence one vector 
+    AAconcatenated <-paste0(AA_seq_tidy$AA[AArow_start[b]:AArow_end[b]], collapse = "")
+  #Making a table where we have the sequence and the short name of the protein (Careful: if you want to add another element to the table make a vector where these elements are included and add it to the c())
+    AA_table <- rbind(AA_table,c(AAconcatenated, AAGene[b], AAStart[b], AAEnd[b], AAOrganism[b]))
+}
+
+#Set column names
+  colnames(AA_table) <- c("AA_sequence","AAGene", "AAStart", "AAEnd", "AAOrganism")
+```
+
+### Fitting AA table and SNP gene data
+
+Finding the sequences of the SNP genes, by collapsing two tables.
+
+```{r}
+#Convert the data frames to data tables to collapse them to one data table.
+  setDT(AA_table)
+  setDT(SNP_genes_sorted)
+  
+#Change the format of two columns so that they fit together
+  SNP_genes_sorted$Start <- as.character(SNP_genes_sorted$Start)
+  SNP_genes_sorted$End <- as.character(SNP_genes_sorted$End)
+
+#Making one data table which has the gene name, start, end, organism, from both the gene result and the DNA table and of course the DNA_sequence.
+  Result_AA <- SNP_genes_sorted[AA_table, on = .(Gene = AAGene, Start = AAStart, End = AAEnd, Organism = AAOrganism), nomatch = 0,
+                  .(Number, x.Gene, Start, End, Organism, AA_sequence, AAGene, AAStart, AAEnd, AAOrganism)]
+  
+#Arrange the result nicely
+  Result_AA_sorted <- Result_AA %>% arrange(Number)
+  Result_AA_sorted <- Result_AA_sorted %>% select("Organism", "AAOrganism", "Number", "x.Gene", "AAGene", "Start", "AAStart", "End", "AAEnd", "AA_sequence")
+  
+  #store the results !Attention: look at the directory of where the file will be stored    #write.csv(Result_AA_sorted, file = "Result_AA_sorted.csv", row.names=FALSE)
+```
+
+
+# Question 2
+
+**Do we see the same mutations in replicates of the mono-cultures and co-culture?**
+
+I only compare the data of AGTU and COTE.
+
+## Import data of all SNP
+
+The data of all SNPs with the frequency and NS/S is found in the file *allSNPs_w_gene_position.tsv*.
+
+```{r}
+#Import data files and have a general look at them.
+  #!Attention: look at the directory of where the file are stored
+  all_SNP <- read.delim(file =  "C:/Users/sabri/OneDrive/Desktop/HS21/Bachelor thesis/Hand in folder/Data/Original/allSNPs_w_gene_position.tsv", header = FALSE)
+    colnames(all_SNP) <- c("Cosme.Rep", "Micr.Genom", "Place", "alt", "Gene", "NS/S", "t0", "t1", "t2", "t3", "t4")
+    #str(all_SNP)
+
+  SNP_genes_sorted <- read.delim(file = "C:/Users/sabri/OneDrive/Desktop/HS21/Bachelor thesis/Hand in folder/Results/Question 1/Result_Genes_sorted.csv", sep = ",")
+  #str(SNP_genes_sorted)
+```
+
+## Tidy up data
+
+I have to tidy the data of all SNPs to be able to work with them. Especially I have to change the Micr.Genom for them to fit the SNP_genes_sorted one.
+
+```{r}
+#Get all Micr.Genom and put them in a vector to look if they fit the ones that will be examined
+  Microbe_Replicon <- unique(all_SNP$Micr.Genom)
+
+#Changing them to fit the ones from the SNP_genes_sorted
+  for (c in 1:nrow(all_SNP)) {
+    if(all_SNP[c, 2] == Microbe_Replicon[1]){
+      all_SNP[c, 2] <- "AGTU.c01"
+    }
+    if(all_SNP[c, 2] == Microbe_Replicon[2]){
+      all_SNP[c, 2] <- "AGTU.c02"
+    }
+    if(all_SNP[c, 2] == Microbe_Replicon[3]){
+      all_SNP[c, 2] <- "AGTU.p01"
+    }
+    if(all_SNP[c, 2] == Microbe_Replicon[4]){
+      all_SNP[c, 2] <- "AGTU.p02"
+    }
+    if(all_SNP[c, 2] == Microbe_Replicon[5]){
+      all_SNP[c, 2] <- "AGTU.p03"
+    }
+    if(all_SNP[c, 2] == Microbe_Replicon[6]){
+      all_SNP[c, 2] <- "COTE.c01"
+    }
+    if(all_SNP[c, 2] == Microbe_Replicon[7]){
+      all_SNP[c, 2] <- "COTE.c02"
+    }
+    if(all_SNP[c, 2] == Microbe_Replicon[8]){
+      all_SNP[c, 2] <- "OCAN.c01"
+    }
+    if(all_SNP[c, 2] == Microbe_Replicon[9]){
+      all_SNP[c, 2] <- "OCAN.c02"
+    }
+    if(all_SNP[c, 2] == Microbe_Replicon[10]){
+      all_SNP[c, 2] <- "MISA.c01"
+    }
+  }
+
+#Check the new Micr.Genom
+  Microbe_Replicon_new <- unique(all_SNP$Micr.Genom)
+```
+
+## Find SNP place
+
+In the all_SNP I want to find all SNPs that are in the same position as the fixed ones found in genes.
+
+```{r}
+#Get the positions that will be looked for
+  SNP_Position <- as.character(unique(SNP_genes_sorted$x.Position))
+
+#Split the table into the positions and make a list of the new tables
+  all_SNP_Place <- split(all_SNP, all_SNP$Place)[SNP_Position]
+```
+
+### Tidy up data again
+
+Now I need to tidy up the list of the tables
+
+```{r}
+#Only the data of AGTU and COTE are needed, delet the other
+  all_SNP_Place[c(15:20)] <- NULL
+
+#AGTU is not present in microcosm 2, so we delet these SNPs for further analysis
+  all_SNP_Place[["703340"]] <- all_SNP_Place[["703340"]][-c(2, 3), ]
+  all_SNP_Place[["83654"]] <- all_SNP_Place[["83654"]][-c(3), ]
+  all_SNP_Place[["2863371"]] <- all_SNP_Place[["2863371"]][-c(1), ]
+```
+
+### Save SNP data
+
+```{r}
+#The files should include the number of the SNP, for this we need a vector with the numbers
+SNP_number <- c("1", "3", "4", "5", "6", "7", "8", "11", "12_15", "16", "18", "19", "24", "27")
+
+#Make the file name and save the items of the list individually.
+  #store the results !Attention: look at the directory of where the file will be stored
+    #for (d in 1:length(all_SNP_Place)) {
+      #file_name <- paste0("SNP", SNP_number[d] ,".csv")
+      #write.csv(all_SNP_Place[d], file = file_name)
+    #}
+```
+
+## Plotting
+
+I want to plot the SNP frequency over time of the just found SNPs.
+
+### Import SNP data
+
+I made individual files that I can now load again for plotting.
+
+```{r}
+#Import data files and have a general look at them.
+#!Attention: look at the directory of where the file are stored
+  #SNP1
+    SNP1 <- read.csv("C:/Users/sabri/OneDrive/Desktop/HS21/Bachelor thesis/Hand in folder/Results/Question 2/SNP1.csv")
+      #str(SNP1)
+    #Because there is a T as the alternative nucleotide R reads this as "TRUE". I change back to a "T" character.
+      for (e in 1:nrow(SNP1)) {
+        if (SNP1$X703340.alt[e] == TRUE)
+        {SNP1$X703340.alt[e] <- "T"}
+      }
+
+  #SNP3
+    SNP3 <- read.csv("C:/Users/sabri/OneDrive/Desktop/HS21/Bachelor thesis/Hand in folder/Results/Question 2/SNP3.csv")
+      #str(SNP3)
+      for (e in 1:nrow(SNP3)) {
+        if (SNP3$X83654.alt[e] == TRUE)
+        {SNP3$X83654.alt[e] <- "T"}
+      }
+    
+  #SNP4
+    SNP4 <- read.csv("C:/Users/sabri/OneDrive/Desktop/HS21/Bachelor thesis/Hand in folder/Results/Question 2/SNP4.csv")
+      #str(SNP4)
+
+  #SNP5
+    SNP5 <- read.csv("C:/Users/sabri/OneDrive/Desktop/HS21/Bachelor thesis/Hand in folder/Results/Question 2/SNP5.csv")
+      #str(SNP5)
+      for (e in 1:nrow(SNP5)) {
+        if (SNP5$X2863371.alt[e] == TRUE)
+        {SNP5$X2863371.alt[e] <- "T"}
+      }
+    
+  #SNP6
+    SNP6 <- read.csv("C:/Users/sabri/OneDrive/Desktop/HS21/Bachelor thesis/Hand in folder/Results/Question 2/SNP6.csv")
+      #str(SNP6)
+    
+  #SNP7
+    SNP7 <- read.csv("C:/Users/sabri/OneDrive/Desktop/HS21/Bachelor thesis/Hand in folder/Results/Question 2/SNP7.csv")
+      #str(SNP7)
+      for (e in 1:nrow(SNP7)) {
+        if (SNP7$X555455.alt[e] == TRUE)
+        {SNP7$X555455.alt[e] <- "T"}
+      }
+    
+  #SNP8
+    SNP8 <- read.csv("C:/Users/sabri/OneDrive/Desktop/HS21/Bachelor thesis/Hand in folder/Results/Question 2/SNP8.csv")
+      #str(SNP8)
+
+  #SNP11
+    SNP11 <- read.csv("C:/Users/sabri/OneDrive/Desktop/HS21/Bachelor thesis/Hand in folder/Results/Question 2/SNP11.csv")
+      #str(SNP11)
+
+  #SNP12_15
+    SNP12_15 <- read.csv("C:/Users/sabri/OneDrive/Desktop/HS21/Bachelor thesis/Hand in folder/Results/Question 2/SNP12_15.csv")
+      #str(SNP12_15)
+
+  #SNP16
+    SNP16 <- read.csv("C:/Users/sabri/OneDrive/Desktop/HS21/Bachelor thesis/Hand in folder/Results/Question 2/SNP16.csv")
+      #str(SNP16)
+    
+  #SNP18
+    SNP18 <- read.csv("C:/Users/sabri/OneDrive/Desktop/HS21/Bachelor thesis/Hand in folder/Results/Question 2/SNP18.csv")
+      #str(SNP18)
+    
+  #SNP19
+    SNP19 <- read.csv("C:/Users/sabri/OneDrive/Desktop/HS21/Bachelor thesis/Hand in folder/Results/Question 2/SNP19.csv")
+      #str(SNP19)
+    
+  #SNP24
+    SNP24 <- read.csv("C:/Users/sabri/OneDrive/Desktop/HS21/Bachelor thesis/Hand in folder/Results/Question 2/SNP24.csv")
+      #str(SNP24)
+      for (e in 1:nrow(SNP24)) {
+        if (SNP24$X5466905.alt[e] == TRUE)
+        {SNP24$X5466905.alt[e] <- "T"}
+      }
+
+  #SNP27
+    SNP27 <- read.csv("C:/Users/sabri/OneDrive/Desktop/HS21/Bachelor thesis/Hand in folder/Results/Question 2/SNP27.csv")
+      #str(SNP27)
+```
+
+### Rearrange data
+
+To be able to plot the data in ggplot I need to rearrange it.
+
+```{r}
+#For plotting I need to have a table with the replicate as name, the time points and the frequency.
+  #SNP1
+    SNP1_name <- c()
+    #Make a vector where the replicate number is repeated 5 times (5 sequencing time points) for each replicate
+      for (f in SNP1$X703340.Cosme.Rep) {
+        SNP1_name_temp <- rep(f, 5)
+        SNP1_name <- c(SNP1_name, SNP1_name_temp)
+      }
+    
+    SNP1_frequency <- c()
+    #Make a vector where the frequency is numeric
+      for (g in 1:nrow(SNP1)) {
+        SNP1_frequency_temp <- as.numeric(SNP1[g, 6:10])
+        SNP1_frequency <- c(SNP1_frequency, SNP1_frequency_temp)
+      }
+    
+    #Make a vector where the time points are repeated as many time as there are replicates
+      SNP1_time <- rep(c("t0", "t11", "t22", "t33", "t44"), nrow(SNP1))
+      #Put everything together
+        SNP1_plot <- as.data.frame(cbind(SNP1_name, SNP1_time, SNP1_frequency))
+        SNP1_plot$SNP1_frequency <- as.numeric(SNP1_plot$SNP1_frequency)
+
+  #SNP3
+    SNP3_name <- c()
+      for (f in SNP3$X83654.Cosme.Rep) {
+        SNP3_name_temp <- rep(f, 5)
+        SNP3_name <- c(SNP3_name, SNP3_name_temp)
+      }
+    
+    SNP3_frequency <- c()
+      for (g in 1:nrow(SNP3)) {
+        SNP3_frequency_temp <- as.numeric(SNP3[g, 8:12])
+        SNP3_frequency <- c(SNP3_frequency, SNP3_frequency_temp)
+      }
+    
+      SNP3_time <- rep(c("t0", "t11", "t22", "t33", "t44"), nrow(SNP3))
+        SNP3_plot <- as.data.frame(cbind(SNP3_name, SNP3_time, SNP3_frequency))
+        SNP3_plot$SNP3_frequency <- as.numeric(SNP3_plot$SNP3_frequency)
+
+  #SNP4
+    SNP4_name <- c()
+      for (f in SNP4$X677536.Cosme.Rep) {
+        SNP4_name_temp <- rep(f, 5)
+        SNP4_name <- c(SNP4_name, SNP4_name_temp)
+      }
+    
+    SNP4_frequency <- c()
+      for (g in 1:nrow(SNP4)) {
+        SNP4_frequency_temp <- as.numeric(SNP4[g, 8:12])
+        SNP4_frequency <- c(SNP4_frequency, SNP4_frequency_temp)
+      }
+      
+      SNP4_time <- rep(c("t0", "t11", "t22", "t33", "t44"), nrow(SNP4))
+        SNP4_plot <- as.data.frame(cbind(SNP4_name, SNP4_time, SNP4_frequency))
+        SNP4_plot$SNP4_frequency <- as.numeric(SNP4_plot$SNP4_frequency)
+
+  #SNP5
+    SNP5_name <- c()
+      for (f in SNP5$X2863371.Cosme.Rep) {
+        SNP5_name_temp <- rep(f, 5)
+        SNP5_name <- c(SNP5_name, SNP5_name_temp)
+      }
+      
+    SNP5_frequency <- c()
+      for (g in 1:nrow(SNP5)) {
+        SNP5_frequency_temp <- as.numeric(SNP5[g, 8:12])
+        SNP5_frequency <- c(SNP5_frequency, SNP5_frequency_temp)
+      }
+    
+      SNP5_time <- rep(c("t0", "t11", "t22", "t33", "t44"), nrow(SNP5))
+        SNP5_plot <- as.data.frame(cbind(SNP5_name, SNP5_time, SNP5_frequency))
+        SNP5_plot$SNP5_frequency <- as.numeric(SNP5_plot$SNP5_frequency)
+
+  #SNP6
+    SNP6_name <- c()
+      for (f in SNP6$X1372439.Cosme.Rep) {
+        SNP6_name_temp <- rep(f, 5)
+        SNP6_name <- c(SNP6_name, SNP6_name_temp)
+      }
+    
+    SNP6_frequency <- c()
+      for (g in 1:nrow(SNP6)) {
+        SNP6_frequency_temp <- as.numeric(SNP6[g, 8:12])
+        SNP6_frequency <- c(SNP6_frequency, SNP6_frequency_temp)
+      }
+      
+      SNP6_time <- rep(c("t0", "t11", "t22", "t33", "t44"), nrow(SNP6))
+        SNP6_plot <- as.data.frame(cbind(SNP6_name, SNP6_time, SNP6_frequency))
+        SNP6_plot$SNP6_frequency <- as.numeric(SNP6_plot$SNP6_frequency)
+        
+  #SNP7
+    SNP7_name <- c()
+      for (f in SNP7$X555455.Cosme.Rep) {
+        SNP7_name_temp <- rep(f, 5)
+        SNP7_name <- c(SNP7_name, SNP7_name_temp)
+      }
+    
+    SNP7_frequency <- c()
+      for (g in 1:nrow(SNP7)) {
+        SNP7_frequency_temp <- as.numeric(SNP7[g, 8:12])
+        SNP7_frequency <- c(SNP7_frequency, SNP7_frequency_temp)
+      }
+      
+      SNP7_time <- rep(c("t0", "t11", "t22", "t33", "t44"), nrow(SNP7))
+        SNP7_plot <- as.data.frame(cbind(SNP7_name, SNP7_time, SNP7_frequency))
+        SNP7_plot$SNP7_frequency <- as.numeric(SNP7_plot$SNP7_frequency)
+    
+  #SNP8
+    SNP8_name <- c()
+      for (f in SNP8$X181352.Cosme.Rep) {
+        SNP8_name_temp <- rep(f, 5)
+        SNP8_name <- c(SNP8_name, SNP8_name_temp)
+      }
+      
+    SNP8_frequency <- c()
+      for (g in 1:nrow(SNP8)) {
+        SNP8_frequency_temp <- as.numeric(SNP8[g, 8:12])
+        SNP8_frequency <- c(SNP8_frequency, SNP8_frequency_temp)
+      }
+      
+      SNP8_time <- rep(c("t0", "t11", "t22", "t33", "t44"), nrow(SNP8))
+        SNP8_plot <- as.data.frame(cbind(SNP8_name, SNP8_time, SNP8_frequency))
+        SNP8_plot$SNP8_frequency <- as.numeric(SNP8_plot$SNP8_frequency)
+  
+   #SNP11
+    SNP11_name <- c()
+      for (f in SNP11$X5466695.Cosme.Rep) {
+        SNP11_name_temp <- rep(f, 5)
+        SNP11_name <- c(SNP11_name, SNP11_name_temp)
+      }
+      
+    SNP11_frequency <- c()
+      for (g in 1:nrow(SNP11)) {
+        SNP11_frequency_temp <- as.numeric(SNP11[g, 8:12])
+        SNP11_frequency <- c(SNP11_frequency, SNP11_frequency_temp)
+      }
+      
+      SNP11_time <- rep(c("t0", "t11", "t22", "t33", "t44"), nrow(SNP11))
+        SNP11_plot <- as.data.frame(cbind(SNP11_name, SNP11_time, SNP11_frequency))
+        SNP11_plot$SNP11_frequency <- as.numeric(SNP11_plot$SNP11_frequency)
+  
+  #SNP12_15
+    SNP12_15_name <- c()
+      for (f in SNP12_15$X5466897.Cosme.Rep) {
+        SNP12_15_name_temp <- rep(f, 5)
+        SNP12_15_name <- c(SNP12_15_name, SNP12_15_name_temp)
+      }
+      
+    SNP12_15_frequency <- c()
+      for (g in 1:nrow(SNP12_15)) {
+        SNP12_15_frequency_temp <- as.numeric(SNP12_15[g, 8:12])
+        SNP12_15_frequency <- c(SNP12_15_frequency, SNP12_15_frequency_temp)
+      }
+      
+      SNP12_15_time <- rep(c("t0", "t11", "t22", "t33", "t44"), nrow(SNP12_15))
+        SNP12_15_plot <- as.data.frame(cbind(SNP12_15_name, SNP12_15_time, SNP12_15_frequency))
+        SNP12_15_plot$SNP12_15_frequency <- as.numeric(SNP12_15_plot$SNP12_15_frequency)
+  
+  #SNP16
+    SNP16_name <- c()
+      for (f in SNP16$X5643748.Cosme.Rep) {
+        SNP16_name_temp <- rep(f, 5)
+        SNP16_name <- c(SNP16_name, SNP16_name_temp)
+      }
+      
+    SNP16_frequency <- c()
+      for (g in 1:nrow(SNP16)) {
+        SNP16_frequency_temp <- as.numeric(SNP16[g, 8:12])
+        SNP16_frequency <- c(SNP16_frequency, SNP16_frequency_temp)
+      }
+      
+      SNP16_time <- rep(c("t0", "t11", "t22", "t33", "t44"), nrow(SNP16))
+        SNP16_plot <- as.data.frame(cbind(SNP16_name, SNP16_time, SNP16_frequency))
+        SNP16_plot$SNP16_frequency <- as.numeric(SNP16_plot$SNP16_frequency)
+  
+  #SNP18
+    SNP18_name <- c()
+      for (f in SNP18$X4436504.Cosme.Rep) {
+        SNP18_name_temp <- rep(f, 5)
+        SNP18_name <- c(SNP18_name, SNP18_name_temp)
+      }
+      
+    SNP18_frequency <- c()
+      for (g in 1:nrow(SNP18)) {
+        SNP18_frequency_temp <- as.numeric(SNP18[g, 8:12])
+        SNP18_frequency <- c(SNP18_frequency, SNP18_frequency_temp)
+      }
+      
+      SNP18_time <- rep(c("t0", "t11", "t22", "t33", "t44"), nrow(SNP18))
+        SNP18_plot <- as.data.frame(cbind(SNP18_name, SNP18_time, SNP18_frequency))
+        SNP18_plot$SNP18_frequency <- as.numeric(SNP18_plot$SNP18_frequency)
+  
+  #SNP19
+    SNP19_name <- c()
+      for (f in SNP19$X5466537.Cosme.Rep) {
+        SNP19_name_temp <- rep(f, 5)
+        SNP19_name <- c(SNP19_name, SNP19_name_temp)
+      }
+      
+    SNP19_frequency <- c()
+      for (g in 1:nrow(SNP19)) {
+        SNP19_frequency_temp <- as.numeric(SNP19[g, 8:12])
+        SNP19_frequency <- c(SNP19_frequency, SNP19_frequency_temp)
+      }
+      
+      SNP19_time <- rep(c("t0", "t11", "t22", "t33", "t44"), nrow(SNP19))
+        SNP19_plot <- as.data.frame(cbind(SNP19_name, SNP19_time, SNP19_frequency))
+        SNP19_plot$SNP19_frequency <- as.numeric(SNP19_plot$SNP19_frequency)
+       
+  #SNP24
+    SNP24_name <- c()
+      for (f in SNP24$X5466905.Cosme.Rep) {
+        SNP24_name_temp <- rep(f, 5)
+        SNP24_name <- c(SNP24_name, SNP24_name_temp)
+      }
+        
+    SNP24_frequency <- c()
+      for (g in 1:nrow(SNP24)) {
+        SNP24_frequency_temp <- as.numeric(SNP24[g, 8:12])
+        SNP24_frequency <- c(SNP24_frequency, SNP24_frequency_temp)
+      }
+        
+      SNP24_time <- rep(c("t0", "t11", "t22", "t33", "t44"), nrow(SNP24))
+        SNP24_plot <- as.data.frame(cbind(SNP24_name, SNP24_time, SNP24_frequency))
+        SNP24_plot$SNP24_frequency <- as.numeric(SNP24_plot$SNP24_frequency)
+        
+  #SNP27
+    SNP27_name <- c()
+      for (f in SNP27$X5466552.Cosme.Rep) {
+        SNP27_name_temp <- rep(f, 5)
+        SNP27_name <- c(SNP27_name, SNP27_name_temp)
+      }
+      
+    SNP27_frequency <- c()
+      for (g in 1:nrow(SNP27)) {
+        SNP27_frequency_temp <- as.numeric(SNP27[g, 8:12])
+        SNP27_frequency <- c(SNP27_frequency, SNP27_frequency_temp)
+      }
+      
+      SNP27_time <- rep(c("t0", "t11", "t22", "t33", "t44"), nrow(SNP27))
+        SNP27_plot <- as.data.frame(cbind(SNP27_name, SNP27_time, SNP27_frequency))
+        SNP27_plot$SNP27_frequency <- as.numeric(SNP27_plot$SNP27_frequency)
+```
+
+### Plotting
+
+Now plotting the data.
+
+The colours are choosen as follow:
+
+
+* 1.1 "#ffdf00"
+
+* 1.2 "#ffff00"
+
+* 2.1 "#6a6aff"
+
+* 2.2 "#6009ff"
+
+* 2.3 "#000060"
+
+* 2.4 "#0000ff"
+
+* 2.5 "#0080ff"
+
+* 3.1 "#ff7d6a"
+
+* 3.2 "#ff4f35"
+
+* 3.3 "#ff0000"
+
+* 3.4 "#ca0000"
+
+* 3.5 "#950000"
+
+* 4.1 "#00ff9f"
+
+* 4.2 "#9fff9f"
+
+* 4.3 "#00ff00"
+
+* 4.4 "#00ca00"
+
+* 4.5 "#009500"
+
+```{r}
+#SNP1
+ggplot(SNP1_plot, aes(x = SNP1_time, y = SNP1_frequency, group = SNP1_name, color = SNP1_name)) +
+  geom_line(position=position_dodge(width=0.2), cex = 1.5) + 
+  labs(title = latex2exp::TeX("\\textbf{Organism:} AGTU.c01; \\textbf{SNP Number:} 1; \\textbf{Position:} 703340"),
+        x = ("Time points"),
+        y = ("Frequency"),
+        colour = "Microcosm.Replicate") +
+  theme(axis.text = element_text(size = 15),
+        axis.title = element_text(size = 15),
+        plot.title = element_text(size = 18),
+        legend.title = element_text(size = 15), 
+        legend.text = element_text(size = 15)) +
+  #1.1 3.5
+  scale_color_manual(values=c("#ffdf00","#950000"))
+
+
+#SNP3
+  ggplot(SNP3_plot, aes(x = SNP3_time, y = SNP3_frequency, group = SNP3_name, color = SNP3_name)) +
+    geom_line(position=position_dodge(width=0.2), cex = 1.5) + 
+  labs(title = latex2exp::TeX("\\textbf{Organism:} AGTU.c01; \\textbf{SNP Number:} 3; \\textbf{Position:} 83654"),
+        x = ("Time points"),
+        y = ("Frequency"),
+        colour = "Microcosm.Replicate") +
+  theme(axis.text = element_text(size = 15),
+        axis.title = element_text(size = 15),
+        plot.title = element_text(size = 18),
+        legend.title = element_text(size = 15), 
+        legend.text = element_text(size = 15)) +
+    #1.1 1.2 3.1 3.2 3.3 3.4 3.5 4.2 4.3
+    scale_color_manual(values=c("#ffdf00", "#ffff00", "#ff7d6a", "#ff4f35", "#ff0000", "#ca0000", "#950000", "#9fff9f", "#00ff00"))
+
+#SNP4
+  ggplot(SNP4_plot, aes(x = SNP4_time, y = SNP4_frequency, group = SNP4_name, color = SNP4_name)) +
+    geom_line(position=position_dodge(width=0.2), cex = 1.5) + 
+  labs(title = latex2exp::TeX("\\textbf{Organism:} AGTU.c01; \\textbf{SNP Number:} 4; \\textbf{Position:} 677536"),
+        x = ("Time points"),
+        y = ("Frequency"),
+        colour = "Microcosm.Replicate") +
+  theme(axis.text = element_text(size = 15),
+        axis.title = element_text(size = 15),
+        plot.title = element_text(size = 18),
+        legend.title = element_text(size = 15), 
+        legend.text = element_text(size = 15)) +
+    #3.2
+    scale_color_manual(values=c("#ff4f35"))
+
+#SNP5
+  ggplot(SNP5_plot, aes(x = SNP5_time, y = SNP5_frequency, group = SNP5_name, color = SNP5_name)) +
+    geom_line(position=position_dodge(width=0.2), cex = 1.5) + 
+  labs(title = latex2exp::TeX("\\textbf{Organism:} AGTU.c01; \\textbf{SNP Number:} 5; \\textbf{Position:} 2863371"),
+        x = ("Time points"),
+        y = ("Frequency"),
+        colour = "Microcosm.Replicate") +
+    theme(axis.text = element_text(size = 15),
+        axis.title = element_text(size = 15),
+        plot.title = element_text(size = 18),
+        legend.title = element_text(size = 15), 
+        legend.text = element_text(size = 15)) +
+    #3.4
+    scale_color_manual(values=c("#ca0000"))
+  
+#SNP6
+  ggplot(SNP6_plot, aes(x = SNP6_time, y = SNP6_frequency, group = SNP6_name, color = SNP6_name)) +
+    geom_line(position=position_dodge(width=0.2), cex = 1.5) + 
+  labs(title = latex2exp::TeX("\\textbf{Organism:} AGTU.c01; \\textbf{SNP Number:} 6; \\textbf{Position:} 1372439"),
+        x = ("Time points"),
+        y = ("Frequency"),
+        colour = "Microcosm.Replicate") +
+    theme(axis.text = element_text(size = 15),
+        axis.title = element_text(size = 15),
+        plot.title = element_text(size = 18),
+        legend.title = element_text(size = 15), 
+        legend.text = element_text(size = 15)) +
+    #4.5
+    scale_color_manual(values=c("#009500"))
+  
+#SNP7
+  ggplot(SNP7_plot, aes(x = SNP7_time, y = SNP7_frequency, group = SNP7_name, color = SNP7_name)) +
+    geom_line(position=position_dodge(width=0.2), cex = 1.5) + 
+  labs(title = latex2exp::TeX("\\textbf{Organism:} AGTU.c02; \\textbf{SNP Number:} 7; \\textbf{Position:} 555455"),
+        x = ("Time points"),
+        y = ("Frequency"),
+        colour = "Microcosm.Replicate") +
+    theme(axis.text = element_text(size = 15),
+        axis.title = element_text(size = 15),
+        plot.title = element_text(size = 18),
+        legend.title = element_text(size = 15), 
+        legend.text = element_text(size = 15)) +
+    #4.1
+    scale_color_manual(values=c("#00ff9f"))
+  
+#SNP8
+  ggplot(SNP8_plot, aes(x = SNP8_time, y = SNP8_frequency, group = SNP8_name, color = SNP8_name)) +
+    geom_line(position=position_dodge(width=0.2), cex = 1.5) + 
+  labs(title = latex2exp::TeX("\\textbf{Organism:} AGTU.p02; \\textbf{SNP Number:} 8; \\textbf{Position:} 181352"),
+        x = ("Time points"),
+        y = ("Frequency"),
+        colour = "Microcosm.Replicate") +
+    theme(axis.text = element_text(size = 15),
+        axis.title = element_text(size = 15),
+        plot.title = element_text(size = 18),
+        legend.title = element_text(size = 15), 
+        legend.text = element_text(size = 15)) +
+    #4.4
+    scale_color_manual(values=c("#00ca00"))
+
+#SNP11
+  ggplot(SNP11_plot, aes(x = SNP11_time, y = SNP11_frequency, group = SNP11_name, color = SNP11_name)) +
+    geom_line(position=position_dodge(width=0.2), cex = 1.5) + 
+  labs(title = latex2exp::TeX("\\textbf{Organism:} COTE.c01; \\textbf{SNP Number:} 11; \\textbf{Position:} 5466695"),
+        x = ("Time points"),
+        y = ("Frequency"),
+        colour = "Microcosm.Replicate") +
+    theme(axis.text = element_text(size = 15),
+        axis.title = element_text(size = 15),
+        plot.title = element_text(size = 18),
+        legend.title = element_text(size = 15), 
+        legend.text = element_text(size = 15)) +
+    #2.1 2.4 3.5 4.3 4.4 4.5 4.5
+    scale_color_manual(values=c("#6a6aff", "#0000ff", "#950000", "#00ff00", "#00ca00", "#009500", "#009500"))
+  
+#SNP12_15
+  ggplot(SNP12_15_plot, aes(x = SNP12_15_time, y = SNP12_15_frequency, group = SNP12_15_name, color = SNP12_15_name)) +
+    geom_line(position=position_dodge(width=0.2), cex = 1.5) + 
+  labs(title = latex2exp::TeX("\\textbf{Organism:} COTE.c01; \\textbf{SNP Number:} 12 and 15; \\textbf{Position:} 5466897"),
+        x = ("Time points"),
+        y = ("Frequency"),
+        colour = "Microcosm.Replicate") +
+    theme(axis.text = element_text(size = 15),
+        axis.title = element_text(size = 15),
+        plot.title = element_text(size = 18),
+        legend.title = element_text(size = 15), 
+        legend.text = element_text(size = 15)) +
+    #2.1 2.2 2.3 2.4 3.2 4.4
+    scale_color_manual(values=c("#6a6aff", "#6009ff", "#000060", "#0000ff", "#ff4f35", "#00ca00"))
+
+#SNP16
+  ggplot(SNP16_plot, aes(x = SNP16_time, y = SNP16_frequency, group = SNP16_name, color = SNP16_name)) +
+    geom_line(position=position_dodge(width=0.2), cex = 1.5) + 
+  labs(title = latex2exp::TeX("\\textbf{Organism:} COTE.c01; \\textbf{SNP Number:} 16; \\textbf{Position:} 5643748"),
+        x = ("Time points"),
+        y = ("Frequency"),
+        colour = "Microcosm.Replicate") +
+    theme(axis.text = element_text(size = 15),
+        axis.title = element_text(size = 15),
+        plot.title = element_text(size = 18),
+        legend.title = element_text(size = 15), 
+        legend.text = element_text(size = 15)) +
+    #2.3
+    scale_color_manual(values=c("#000060"))
+  
+#SNP18
+  ggplot(SNP18_plot, aes(x = SNP18_time, y = SNP18_frequency, group = SNP18_name, color = SNP18_name)) +
+    geom_line(position=position_dodge(width=0.2), cex = 1.5) + 
+  labs(title = latex2exp::TeX("\\textbf{Organism:} COTE.c01; \\textbf{SNP Number:} 18; \\textbf{Position:} 4436504"),
+        x = ("Time points"),
+        y = ("Frequency"),
+        colour = "Microcosm.Replicate") +
+    theme(axis.text = element_text(size = 15),
+        axis.title = element_text(size = 15),
+        plot.title = element_text(size = 18),
+        legend.title = element_text(size = 15), 
+        legend.text = element_text(size = 15)) +
+    #2.5
+    scale_color_manual(values=c("#0080ff"))  
+  
+#SNP19
+  ggplot(SNP19_plot, aes(x = SNP19_time, y = SNP19_frequency, group = SNP19_name, color = SNP19_name)) +
+    geom_line(position=position_dodge(width=0.2), cex = 1.5) + 
+  labs(title = latex2exp::TeX("\\textbf{Organism:} COTE.c01; \\textbf{SNP Number:} 19; \\textbf{Position:} 5466537"),
+        x = ("Time points"),
+        y = ("Frequency"),
+        colour = "Microcosm.Replicate") +
+    theme(axis.text = element_text(size = 15),
+        axis.title = element_text(size = 15),
+        plot.title = element_text(size = 18),
+        legend.title = element_text(size = 15), 
+        legend.text = element_text(size = 15)) +
+    #2.5 4.2
+    scale_color_manual(values=c("#0080ff", "#9fff9f"))
+  
+#SNP24
+  ggplot(SNP24_plot, aes(x = SNP24_time, y = SNP24_frequency, group = SNP24_name, color = SNP24_name)) +
+    geom_line(position=position_dodge(width=0.2), cex = 1.5) + 
+  labs(title = latex2exp::TeX("\\textbf{Organism:} COTE.c01; \\textbf{SNP Number:} 24; \\textbf{Position:} 5466905"),
+        x = ("Time points"),
+        y = ("Frequency"),
+        colour = "Microcosm.Replicate") +
+    theme(axis.text = element_text(size = 15),
+        axis.title = element_text(size = 15),
+        plot.title = element_text(size = 18),
+        legend.title = element_text(size = 15), 
+        legend.text = element_text(size = 15)) +
+    #3.1 3.3 4.5
+    scale_color_manual(values=c("#ff7d6a", "#ff0000", "#009500"))
+  
+#SNP27
+  ggplot(SNP27_plot, aes(x = SNP27_time, y = SNP27_frequency, group = SNP27_name, color = SNP27_name)) +
+    geom_line(position=position_dodge(width=0.2), cex = 1.5) + 
+  labs(title = latex2exp::TeX("\\textbf{Organism:} COTE.c01; \\textbf{SNP Number:} 27; \\textbf{Position:} 5466552"),
+        x = ("Time points"),
+        y = ("Frequency"),
+        colour = "Microcosm.Replicate") +
+    theme(axis.text = element_text(size = 15),
+        axis.title = element_text(size = 15),
+        plot.title = element_text(size = 18),
+        legend.title = element_text(size = 15), 
+        legend.text = element_text(size = 15)) +
+    #3.4 4.3 4.5
+    scale_color_manual(values=c("#ca0000", "#00ff00", "#009500"))
+```
+
+
+# Question 3
+
+**Can we estimate dN/dS? Which genes are under positive/negative selection?**
+
+## Import data of all SNP
+
+The data of all SNPs with the frequency and NS/S is found in the file *allSNPs_w_gene_position.tsv*.
+
+```{r}
+#Import data files and have a general look at them.
+  #!Attention: look at the directory of where the file are stored
+  all_SNP <- read.delim(file =  "C:/Users/sabri/OneDrive/Desktop/HS21/Bachelor thesis/Hand in folder/Data/Original/allSNPs_w_gene_position.tsv", header = FALSE)
+    colnames(all_SNP) <- c("Cosme.Rep", "Micr.Genom", "Place", "alt", "Gene", "NS/S", "t0", "t1", "t2", "t3", "t4")
+    #str(all_SNP)
+  
+  SNP_genes_sorted <- read.delim(file = "C:/Users/sabri/OneDrive/Desktop/HS21/Bachelor thesis/Hand in folder/Results/Question 1/Result_Genes_sorted.csv", sep = ",")
+    #str(SNP_genes_sorted)
+```
+
+## Tidy up data
+
+I have to tidy the data of all SNPs to be able to work with them. Especially I have to change the Micr.Genom for them to fit the SNP_genes_sorted one.
+
+```{r}
+#Get all Micr.Genom and put them in a vector to look if they fit the ones that will be examined
+  Microbe_Replicon <- unique(all_SNP$Micr.Genom)
+
+#Changing them to fit the ones from the SNP_genes_sorted
+  for (c in 1:nrow(all_SNP)) {
+    if(all_SNP[c, 2] == Microbe_Replicon[1]){
+      all_SNP[c, 2] <- "AGTU.c01"
+    }
+    if(all_SNP[c, 2] == Microbe_Replicon[2]){
+      all_SNP[c, 2] <- "AGTU.c02"
+    }
+    if(all_SNP[c, 2] == Microbe_Replicon[3]){
+      all_SNP[c, 2] <- "AGTU.p01"
+    }
+    if(all_SNP[c, 2] == Microbe_Replicon[4]){
+      all_SNP[c, 2] <- "AGTU.p02"
+    }
+    if(all_SNP[c, 2] == Microbe_Replicon[5]){
+      all_SNP[c, 2] <- "AGTU.p03"
+    }
+    if(all_SNP[c, 2] == Microbe_Replicon[6]){
+      all_SNP[c, 2] <- "COTE.c01"
+    }
+    if(all_SNP[c, 2] == Microbe_Replicon[7]){
+      all_SNP[c, 2] <- "COTE.c02"
+    }
+    if(all_SNP[c, 2] == Microbe_Replicon[8]){
+      all_SNP[c, 2] <- "OCAN.c01"
+    }
+    if(all_SNP[c, 2] == Microbe_Replicon[9]){
+      all_SNP[c, 2] <- "OCAN.c02"
+    }
+    if(all_SNP[c, 2] == Microbe_Replicon[10]){
+      all_SNP[c, 2] <- "MISA.c01"
+    }
+  }
+
+#Check the new Micr.Genom
+  Microbe_Replicon_new <- unique(all_SNP$Micr.Genom)
+```
+
+## Find SNP place
+
+In the all_SNP I want to find all SNPs that are in the same position as the fixed ones found in genes.
+
+```{r}
+#Get the positions that will be looked for
+  SNP_Position <- as.character(unique(SNP_genes_sorted$x.Position))
+
+#Split the table into the positions and make a list of the new tables
+  all_SNP_Place <- split(all_SNP, all_SNP$Place)[SNP_Position]
+```
+
+## Finde Genes
+
+```{r}
+#Finding the gene tags of the fixed SNPs 
+  Genes <- c()
+    for (i in 1:length(all_SNP_Place)) {
+      temp_gene <- unique(all_SNP_Place[[i]][["Gene"]])
+      Genes <- c(Genes, temp_gene)
+    }
+  #There are dublicates in there because some fixed SNPs are in the same gene
+    Genes_which <- which(duplicated(Genes))
+    Genes_unique <- unique(Genes)
+    Genes_unique <- Genes_unique[-2]
+
+#Split and select only the genes of the fixed SNPs from all SNP data
+  all_SNP_Genes <- split(all_SNP, all_SNP$Gene)[Genes]
+```
+
+### Tidy up data again
+
+Now I need to tidy up the list of the tables
+
+```{r}
+#AGTU is not present in microcosm 2, so we delet these SNPs for further analysis
+  all_SNP_Genes[["AGTU001.0001.c01_006770"]] <- all_SNP_Genes[["AGTU001.0001.c01_006770"]][-c(2, 3), ]
+  all_SNP_Genes[["AGTU001.0001.c01_000790"]] <- all_SNP_Genes[["AGTU001.0001.c01_000790"]][-c(3), ]
+  all_SNP_Genes[["AGTU001.0001.c01_027410"]] <- all_SNP_Genes[["AGTU001.0001.c01_027410"]][-c(2, 3), ]
+#OCAN is only present in microcosm 4, the others are deleted
+  all_SNP_Genes[["OCAN001.0001.c02_020540"]] <- all_SNP_Genes[["OCAN001.0001.c02_020540"]][c(-1),]
+
+all_SNP_Genes[Genes_which] <- NULL
+
+```
+
+### Save Gene data
+
+```{r}
+#The files should include the number of the SNP, for this we need a vector with the numbers now with the MISA and OCAN data
+SNP_number <- c("1", "3", "4", "5", "6", "7", "8", "11_12_15_19_24_27", "16", "18", "30", "31", "32", "33", "34", "38_39_40_41")
+  
+#store the results !Attention: look at the directory of where the file will be stored
+  #for (j in 1:length(all_SNP_Genes)) {
+    #file_name <- paste0("Gene_to_SNP", SNP_number[j] ,".csv")
+    #write.csv(all_SNP_Genes[j], file = file_name)
+  #}
+```
+
+
+## dN/dS calculation
+
+I calculate dN/dS per microcosm.
+
+```{r}
+#I only distinguish between the microcosm and not the replicate. So first I have to change the microcosm.replicate to only the microcosm number.
+  for (k in 1:length(all_SNP_Genes)) {
+    for (l in 1:nrow(all_SNP_Genes[[k]])) {
+      if (all_SNP_Genes[[k]][["Cosme.Rep"]][l] == 1.1)  {all_SNP_Genes[[k]][["Cosme.Rep"]][l] <- 1}
+      if (all_SNP_Genes[[k]][["Cosme.Rep"]][l] == 1.2)  {all_SNP_Genes[[k]][["Cosme.Rep"]][l] <- 1}
+      
+      if (all_SNP_Genes[[k]][["Cosme.Rep"]][l] == 2.1)  {all_SNP_Genes[[k]][["Cosme.Rep"]][l] <- 2}
+      if (all_SNP_Genes[[k]][["Cosme.Rep"]][l] == 2.2)  {all_SNP_Genes[[k]][["Cosme.Rep"]][l] <- 2}
+      if (all_SNP_Genes[[k]][["Cosme.Rep"]][l] == 2.3)  {all_SNP_Genes[[k]][["Cosme.Rep"]][l] <- 2}
+      if (all_SNP_Genes[[k]][["Cosme.Rep"]][l] == 2.4)  {all_SNP_Genes[[k]][["Cosme.Rep"]][l] <- 2}
+      if (all_SNP_Genes[[k]][["Cosme.Rep"]][l] == 2.5)  {all_SNP_Genes[[k]][["Cosme.Rep"]][l] <- 2}
+      
+      if (all_SNP_Genes[[k]][["Cosme.Rep"]][l] == 3.1)  {all_SNP_Genes[[k]][["Cosme.Rep"]][l] <- 3}
+      if (all_SNP_Genes[[k]][["Cosme.Rep"]][l] == 3.2)  {all_SNP_Genes[[k]][["Cosme.Rep"]][l] <- 3}
+      if (all_SNP_Genes[[k]][["Cosme.Rep"]][l] == 3.3)  {all_SNP_Genes[[k]][["Cosme.Rep"]][l] <- 3}
+      if (all_SNP_Genes[[k]][["Cosme.Rep"]][l] == 3.4)  {all_SNP_Genes[[k]][["Cosme.Rep"]][l] <- 3}
+      if (all_SNP_Genes[[k]][["Cosme.Rep"]][l] == 3.5)  {all_SNP_Genes[[k]][["Cosme.Rep"]][l] <- 3}
+      
+      if (all_SNP_Genes[[k]][["Cosme.Rep"]][l] == 4.1)  {all_SNP_Genes[[k]][["Cosme.Rep"]][l] <- 4}
+      if (all_SNP_Genes[[k]][["Cosme.Rep"]][l] == 4.2)  {all_SNP_Genes[[k]][["Cosme.Rep"]][l] <- 4}
+      if (all_SNP_Genes[[k]][["Cosme.Rep"]][l] == 4.3)  {all_SNP_Genes[[k]][["Cosme.Rep"]][l] <- 4}
+      if (all_SNP_Genes[[k]][["Cosme.Rep"]][l] == 4.4)  {all_SNP_Genes[[k]][["Cosme.Rep"]][l] <- 4}
+      if (all_SNP_Genes[[k]][["Cosme.Rep"]][l] == 4.5)  {all_SNP_Genes[[k]][["Cosme.Rep"]][l] <- 4}
+    }
+  }
+
+  #Splitting the item on the list into a list for the microcosms
+    for (m in 1:length(all_SNP_Genes)) {
+      all_SNP_Genes[[m]] <- split(all_SNP_Genes[[m]], all_SNP_Genes[[m]][1])
+    }
+
+
+  #Calculating dN/dS
+    Result_dNdS_microcosm <- as.data.frame(c())
+    
+    for (n in 1:length(all_SNP_Genes)) {
+      for (o in 1:length(all_SNP_Genes[[n]])) {
+        temp_SNP_count_NS <- 0
+        temp_SNP_count_S <- 0
+        temp_Result_dNdS_microcosm <- c()
+        
+        for (p in 1:nrow(all_SNP_Genes[[n]][[o]])) {
+          if (all_SNP_Genes[[n]][[o]][["NS/S"]][p] == "NS") {
+            temp_SNP_count_NS <- temp_SNP_count_NS + 1
+          } else if (all_SNP_Genes[[n]][[o]][["NS/S"]][p] == "S") {
+            temp_SNP_count_S <- temp_SNP_count_S + 1}
+          if (temp_SNP_count_S == 0) {
+            temp_SNP_dNdS <- NA
+          } else if (temp_SNP_count_NS == 0) {
+            temp_SNP_dNdS <- NA
+          } else {temp_SNP_dNdS <- temp_SNP_count_NS / temp_SNP_count_S}
+          temp_Result_dNdS_microcosm <- c(temp_SNP_count_NS, temp_SNP_count_S, temp_SNP_dNdS, names(all_SNP_Genes[[n]][o]), names(all_SNP_Genes[n]))}
+        Result_dNdS_microcosm <- rbind(Result_dNdS_microcosm, temp_Result_dNdS_microcosm)
+        colnames(Result_dNdS_microcosm) <- c("count_NS", "count_S", "dNdS", "rep", "Gene")}
+    }
+
+    
+  #store the results !Attention: look at the directory of where the file will be stored
+    #write.csv(Result_dNdS_microcosm, file = "Result_dNdS_microcosm.csv", row.names=FALSE)
+```
